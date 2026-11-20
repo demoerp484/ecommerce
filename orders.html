@@ -101,6 +101,18 @@ $("loginGo").onclick = async () => {
 $("logoutBtn").onclick = () => signOut(auth);
 
 const st = o => o.status || "New";
+function waNum(c) {
+  if (/@/.test(String(c || ""))) return "";
+  let d = String(c || "").replace(/\D/g, "");
+  if (d.length < 8) return "";
+  if (d.startsWith("00")) d = d.slice(2); else if (d.startsWith("0")) d = "971" + d.slice(1); else if (/^5\d{8}$/.test(d)) d = "971" + d;
+  return d;
+}
+function waLink(o) {
+  const n = waNum(o.contact); if (!n) return "";
+  const text = "Hello " + (o.customer || "") + ", your order " + o.id.slice(0, 6).toUpperCase() + " is now " + st(o) + ". Total " + money(o.total) + ". Thank you!";
+  return `<a class="btn" target="_blank" rel="noopener" href="https://wa.me/${n}?text=${encodeURIComponent(text)}">Message customer on WhatsApp</a>`;
+}
 function render() {
   const counts = { All: orders.length };
   STATUSES.forEach(x => counts[x] = orders.filter(o => st(o) === x).length);
@@ -116,14 +128,14 @@ function render() {
       <div class="row"><strong>Order ${esc(o.id.slice(0, 6).toUpperCase())}</strong><span class="status s-${st(o)}">${st(o)}</span></div>
       <div class="note">${esc(when)}${o.guest ? " (guest)" : ""}</div>
       <div><strong>${esc(o.customer)}</strong><br>${esc(o.contact)}<br>${esc(o.address || "No address given")}</div>
-      <div>${lines}</div>
+      <div>${lines}<div class="line"><span>Delivery</span><span>${o.deliveryFee ? money(o.deliveryFee) : "Free"}</span></div></div>
       <div class="row"><strong>Total</strong><strong>${money(o.total)}</strong></div>
       <div class="note">${esc(o.payment || "Cash on delivery")}</div>
       <div class="controls">
         <div><label for="s-${o.id}">Order status</label><select id="s-${o.id}" data-status="${o.id}">${STATUSES.map(x => `<option ${x === st(o) ? "selected" : ""}>${x}</option>`).join("")}</select></div>
         <div><label for="p-${o.id}">Payment</label><select id="p-${o.id}" data-pay="${o.id}">${["Unpaid", "Paid"].map(x => `<option ${x === pay ? "selected" : ""}>${x}</option>`).join("")}</select></div>
       </div>
-      <button class="danger" data-del="${o.id}">Delete order</button>
+      ${waLink(o)}<button class="danger" data-del="${o.id}">Delete order</button>
     </article>`;
   }).join("") : '<p class="note">No orders to show.</p>';
 }
