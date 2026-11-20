@@ -21,7 +21,11 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .hero h2{font-size:clamp(1.8rem,4vw,2.8rem);margin:0 0 6px;max-width:18ch;line-height:1.15}
 .hero p{margin:0;color:var(--muted)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:20px;padding:20px 5vw 60px}
-.item{background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column}
+.item{background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;position:relative}
+.badge{position:absolute;top:10px;left:10px;background:#b3372e;color:#fff;font:700 .8rem system-ui,sans-serif;padding:3px 8px;border-radius:4px}
+.was{color:var(--muted);font-weight:400;font-size:.8rem;margin-left:4px}
+.pick{width:20px;height:20px;position:absolute;top:10px;right:10px;accent-color:var(--accent)}
+.bulk{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 5vw 0;font-family:system-ui,sans-serif;font-size:.9rem}.bulk input{width:120px}
 .item img{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--line)}
 .item .body{padding:12px;display:flex;flex-direction:column;gap:6px;flex:1}
 .item h3{margin:0;font-size:1rem}
@@ -37,6 +41,7 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
 .preview{max-width:100%;max-height:160px;margin-top:8px;border-radius:6px}
 .cartline{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-family:system-ui,sans-serif;font-size:.9rem}
 .msg{font-size:.85rem;color:var(--danger);min-height:1.2em;font-family:system-ui,sans-serif}
+.search{padding:14px 5vw 0}.search input{max-width:460px;font-size:1rem;padding:10px 12px}
 .hidden{display:none!important}
 </style>
 </head>
@@ -46,6 +51,7 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
   <nav>
     <button id="adminBtn">Admin</button>
     <button id="addBtn" class="primary hidden">Add item</button>
+    <button id="seedBtn" class="hidden">Load sample items</button>
     <button id="logoutBtn" class="hidden">Log out</button>
     <button id="cartBtn">Cart (<span id="cartCount">0</span>)</button>
   </nav>
@@ -55,6 +61,13 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
   <h2>Everything in stock, ready to ship</h2>
   <p>Browse the items below and add them to your cart.</p>
 </section>
+<div class="search"><label for="search" class="hidden">Search items</label><input id="search" type="search" placeholder="Search items, for example stapler or pen"></div>
+<div id="bulkBar" class="bulk hidden">
+  <strong id="selCount">0 selected</strong>
+  <button id="selAll">Select all shown</button><button id="selNone">Clear selection</button>
+  <input id="bulkDisc" type="number" min="1" max="90" placeholder="Discount %" aria-label="Discount percent for selected items">
+  <button id="applyDisc" class="primary">Apply discount</button><button id="removeDisc">Remove discount</button>
+</div>
 <main id="grid" class="grid"></main>
 <p id="empty" class="empty hidden">No items yet. Log in as admin and add your first item.</p>
 
@@ -71,7 +84,8 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
 <dialog id="itemDlg">
   <h2 id="itemTitle">Add item</h2>
   <label for="iName">Name</label><input id="iName">
-  <label for="iPrice">Price</label><input id="iPrice" type="number" min="0" step="0.01">
+  <label for="iPrice">Price (AED)</label><input id="iPrice" type="number" min="0" step="0.01">
+  <label for="iDisc">Discount % (leave empty for none)</label><input id="iDisc" type="number" min="0" max="90" step="1">
   <label for="iDesc">Description</label><textarea id="iDesc" rows="3"></textarea>
   <label for="iPhoto">Photo</label><input id="iPhoto" type="file" accept="image/*">
   <img id="iPreview" class="preview hidden" alt="Photo preview">
@@ -100,12 +114,10 @@ const firebaseConfig = {
   apiKey: "AIzaSyBydb1teoX761Dbsaw7I3tv72YxDC4px7g",
   authDomain: "ecommercedemo-3d5cb.firebaseapp.com",
   projectId: "ecommercedemo-3d5cb",
-  storageBucket: "ecommercedemo-3d5cb.firebasestorage.app",
-  messagingSenderId: "232373069175",
   appId: "1:232373069175:web:74c8412f0346dceaba6d72"
 };
 const SHOP_NAME = "My Shop";
-const CURRENCY = "$";
+const CURRENCY = "AED ";
 /* ================================================================================================= */
 
 document.getElementById("shopName").textContent = SHOP_NAME;
@@ -113,6 +125,8 @@ document.title = SHOP_NAME;
 const $ = id => document.getElementById(id);
 const configured = firebaseConfig.apiKey !== "YOUR_API_KEY";
 let db, auth, items = [], isAdmin = false, editId = null, photoData = "";
+const selected = new Set(); let shownIds = [];
+const countSel = () => [...selected].filter(id => items.some(i => i.id === id)).length;
 let cart = JSON.parse(localStorage.getItem("cart") || "{}");
 
 if (configured) {
@@ -122,7 +136,8 @@ if (configured) {
     items = s.docs.map(d => ({ id: d.id, ...d.data() })); render();
   });
   onAuthStateChanged(auth, u => {
-    isAdmin = !!u;
+    isAdmin = !!u; if (!u) selected.clear();
+    $("seedBtn").classList.toggle("hidden", !isAdmin);
     $("addBtn").classList.toggle("hidden", !isAdmin);
     $("logoutBtn").classList.toggle("hidden", !isAdmin);
     $("adminBtn").classList.toggle("hidden", isAdmin);
@@ -134,20 +149,31 @@ if (configured) {
 }
 
 const money = n => CURRENCY + Number(n).toFixed(2);
+const salePrice = i => Math.round(i.price * (100 - (i.discount || 0))) / 100;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
 function render() {
-  $("grid").innerHTML = items.map(i => `
+  const q = $("search").value.trim().toLowerCase();
+  const shown = items.filter(i => ((i.name || "") + " " + (i.desc || "")).toLowerCase().includes(q));
+  shownIds = shown.map(i => i.id);
+  $("bulkBar").classList.toggle("hidden", !isAdmin);
+  $("selCount").textContent = countSel() + " selected";
+  $("grid").innerHTML = shown.map(i => `
     <article class="item">
+      ${i.discount ? `<span class="badge">-${i.discount}%</span>` : ""}
+      ${isAdmin ? `<input type="checkbox" class="pick" data-pick="${i.id}" aria-label="Select ${esc(i.name)}" ${selected.has(i.id) ? "checked" : ""}>` : ""}
       <img src="${i.photo || ""}" alt="${esc(i.name)}" loading="lazy">
       <div class="body">
         <h3>${esc(i.name)}</h3><p>${esc(i.desc)}</p>
-        <div class="row"><span class="price">${money(i.price)}</span>
+        <div class="row"><span class="price">${money(salePrice(i))}${i.discount ? ` <s class="was">${money(i.price)}</s>` : ""}</span>
         <button class="primary" data-add="${i.id}">Add to cart</button></div>
         ${isAdmin ? `<div class="row"><button data-edit="${i.id}">Edit</button><button class="danger" data-del="${i.id}">Delete</button></div>` : ""}
       </div>
     </article>`).join("");
-  if (configured) $("empty").classList.toggle("hidden", items.length > 0);
+  if (configured) {
+    $("empty").textContent = items.length ? "No items match your search." : "No items yet. Log in as admin and add your first item.";
+    $("empty").classList.toggle("hidden", shown.length > 0);
+  }
   updateCart();
 }
 
@@ -165,11 +191,81 @@ function updateCart() {
   $("cartCount").textContent = lines.reduce((n, [, q]) => n + q, 0);
   let total = 0;
   $("cartLines").innerHTML = lines.length ? lines.map(([id, q]) => {
-    const i = items.find(x => x.id === id); total += i.price * q;
-    return `<div class="cartline"><span>${esc(i.name)} × ${q}</span><span>${money(i.price * q)} <button data-rm="${id}">Remove</button></span></div>`;
+    const i = items.find(x => x.id === id); total += salePrice(i) * q;
+    return `<div class="cartline"><span>${esc(i.name)} × ${q}</span><span>${money(salePrice(i) * q)} <button data-rm="${id}">Remove</button></span></div>`;
   }).join("") : `<p class="empty" style="padding:10px 0">Your cart is empty.</p>`;
   $("cartTotal").textContent = money(total);
 }
+$("grid").addEventListener("change", e => {
+  const id = e.target.dataset.pick; if (!id) return;
+  if (e.target.checked) selected.add(id); else selected.delete(id);
+  $("selCount").textContent = countSel() + " selected";
+});
+$("selAll").onclick = () => { shownIds.forEach(id => selected.add(id)); render(); };
+$("selNone").onclick = () => { selected.clear(); render(); };
+$("applyDisc").onclick = () => applyBulk(Math.min(90, Math.max(0, Math.round(parseFloat($("bulkDisc").value) || 0))), true);
+$("removeDisc").onclick = () => applyBulk(0);
+async function applyBulk(d, needValue) {
+  const ids = [...selected].filter(id => items.some(i => i.id === id));
+  if (!ids.length) return alert("Select at least one item first.");
+  if (needValue && !d) return alert("Enter a discount between 1 and 90.");
+  try {
+    await Promise.all(ids.map(id => setDoc(doc(db, "items", id), { discount: d }, { merge: true })));
+    selected.clear(); $("bulkDisc").value = ""; render();
+  } catch (err) { alert("Could not save: " + err.message); }
+}
+const art = (bg, emoji) => "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"><rect width="400" height="300" fill="${bg}"/><text x="200" y="185" font-size="110" text-anchor="middle">${emoji}</text></svg>`);
+const seed = [
+  ["A4 copy paper, 500 sheets, 80 gsm", 25, "Double A or similar, single ream.", "#e8e4d8", "📄"],
+  ["A4 copy paper, box of 5 reams", 67, "2,500 sheets, 80 gsm.", "#e3e8e0", "📦"],
+  ["Ballpoint pens, blue, pack of 10", 11.95, "Staedtler triangular grip.", "#d4e0ee", "🖊️"],
+  ["Gel pen, blue", 5.95, "Uni-ball Eye, single pen.", "#d9dff0", "✒️"],
+  ["Whiteboard markers, 4 colors", 20.25, "Pilot, bullet tip.", "#e6dcef", "🖍️"],
+  ["Permanent marker", 4.95, "Bic Conical, black.", "#dcdcdc", "🖋️"],
+  ["Sticky notes, 3 x 3 in", 6.55, "Post-it yellow, one pad.", "#f5ecb8", "🗒️"],
+  ["Desktop stapler with remover", 9.5, "Atlas, standard size.", "#d9e4e0", "📎"],
+  ["Staple pins, box", 1.15, "Standard 24/6 size.", "#e4e0d6", "📌"],
+  ["Clear tape", 6.5, "Scotch Magic, 3/4 x 300 in.", "#dde8ee", "🎞️"],
+  ["Office scissors", 9, "Stainless steel blades.", "#e8d9d4", "✂️"],
+  ["Expanding file", 28, "Elastic closure, A4.", "#e2d6c4", "🗂️"],
+  ["Glue stick, 21 g", 8.25, "UHU Clear Magic.", "#e3ecd4", "🧴"],
+  ["Notebook, A4, 100 sheets", 18.95, "Royal, ruled.", "#d6dfe8", "📓"],
+  ["Correction pen", 12.95, "Pentel, fast drying.", "#ecdcd4", "🩹"],
+  ["Thermal receipt roll, 80 x 80 mm", 2.75, "For POS machines.", "#e8e8e0", "🧾"],
+  ["Binder clips, 32 mm, 12 pcs", 4.49, "Black metal clips.", "#dcdcdc", "🗜️"],
+  ["Highlighters, pack of 4", 15.79, "Bic Tank pastel colors.", "#f3e6b0", "🖍️"],
+  ["HB pencils, pack of 12", 8, "Flamingo gold HB.", "#f0e2b8", "✏️"],
+  ["Pencils with eraser tip, 12 pcs", 16.95, "Staedtler Noris.", "#e6d8b8", "✏️"],
+  ["Erasers, pack of 7", 11.95, "Staedtler Rasoplast.", "#efd9dc", "🧽"],
+  ["Pencil sharpener, 2 holes", 11, "Staedtler tub sharpener.", "#dce6dc", "📐"],
+  ["Ruler, 30 cm", 3.75, "Maped clear grip ruler.", "#d6e6ee", "📏"],
+  ["Masking tape", 6.75, "Paper masking tape roll.", "#eadfc8", "🎞️"],
+  ["Cutter knife", 4, "Snap-off blade.", "#e6d6d0", "🔪"],
+  ["Envelopes, peel and seal, 50 pcs", 6.29, "Standard size, white.", "#e8e8ee", "✉️"],
+  ["Rubber bands, 25 g", 2.5, "Assorted sizes.", "#efe0c4", "⭕"],
+  ["Magnetic whiteboard, 35 x 25 cm", 18, "Maagen, small desk size.", "#e8eef0", "🧲"],
+  ["Whiteboard eraser, magnetic", 12.95, "Deli, foam pad.", "#dde4e8", "🧹"],
+  ["Super sticky notes, 5 pads", 37.59, "Post-it, 3 x 3 in.", "#f6e9a8", "📝"],
+  ["Colored sticky notes, 51 x 51 mm", 5.75, "Stockhill, assorted colors.", "#f4d6e4", "🟨"],
+  ["Pin and clip set", 3.5, "Deli, desk set.", "#dfe6e0", "📍"],
+  ["Spiral notebook, 3 subjects, A4", 31.95, "Foldermate, 120 sheets.", "#d6dcee", "📒"],
+  ["Sketch pens, 24 colors", 9.5, "Netrag, washable ink.", "#e6dcf0", "🎨"],
+  ["Quick-loading stapler", 11.75, "HD-45 desktop stapler.", "#d8e4de", "🗃️"],
+  ["Permanent markers, 4 pcs", 12.75, "Pentel, assorted colors.", "#d9d9e4", "🖊️"],
+  ["Gift-wrap tape in dispenser", 9.95, "Scotch, 19 mm x 16.5 m.", "#e4e0ee", "🎁"]
+];
+$("seedBtn").onclick = async () => {
+  const missing = seed.map((r, n) => ({ id: "sample-" + (n + 1), r, n })).filter(o => !items.some(i => i.id === o.id));
+  if (!missing.length) return alert("All sample items are already in your shop.");
+  if (!confirm("Add " + missing.length + " sample office items? You can change photos, prices and discounts afterwards.")) return;
+  try {
+    const t = Date.now();
+    await Promise.all(missing.map(o => setDoc(doc(db, "items", o.id), {
+      name: o.r[0], price: o.r[1], desc: o.r[2], photo: art(o.r[3], o.r[4]), discount: 0, createdAt: new Date(t - o.n * 1000)
+    })));
+  } catch (err) { alert("Could not add items: " + err.message); }
+};
+$("search").oninput = render;
 $("cartBtn").onclick = () => { $("cartMsg").textContent = ""; $("cartDlg").showModal(); };
 $("cartClose").onclick = () => $("cartDlg").close();
 $("cartLines").addEventListener("click", e => { if (e.target.dataset.rm) { delete cart[e.target.dataset.rm]; saveCart(); } });
@@ -178,7 +274,7 @@ $("cartOrder").onclick = async () => {
   if (!lines.length) return $("cartMsg").textContent = "Add an item to your cart first.";
   if (!$("cName").value.trim() || !$("cContact").value.trim()) return $("cartMsg").textContent = "Enter your name and a phone or email.";
   try {
-    const order = lines.map(([id, q]) => { const i = items.find(x => x.id === id); return { name: i.name, price: i.price, qty: q }; });
+    const order = lines.map(([id, q]) => { const i = items.find(x => x.id === id); return { name: i.name, price: salePrice(i), qty: q }; });
     await addDoc(collection(db, "orders"), { customer: $("cName").value.trim(), contact: $("cContact").value.trim(), items: order, total: order.reduce((s, o) => s + o.price * o.qty, 0), createdAt: serverTimestamp() });
     cart = {}; saveCart(); $("cartDlg").close(); alert("Order placed. We will contact you soon.");
   } catch (err) { $("cartMsg").textContent = "Could not place the order: " + err.message; }
@@ -197,7 +293,7 @@ $("logoutBtn").onclick = () => signOut(auth);
 function openItem(it) {
   editId = it?.id || null; photoData = it?.photo || "";
   $("itemTitle").textContent = it ? "Edit item" : "Add item";
-  $("iName").value = it?.name || ""; $("iPrice").value = it?.price ?? ""; $("iDesc").value = it?.desc || ""; $("iPhoto").value = "";
+  $("iName").value = it?.name || ""; $("iPrice").value = it?.price ?? ""; $("iDisc").value = it?.discount || ""; $("iDesc").value = it?.desc || ""; $("iPhoto").value = "";
   $("iPreview").src = photoData; $("iPreview").classList.toggle("hidden", !photoData);
   $("itemMsg").textContent = ""; $("itemDlg").showModal();
 }
@@ -221,7 +317,7 @@ $("itemSave").onclick = async () => {
   const name = $("iName").value.trim(), price = parseFloat($("iPrice").value);
   if (!name || isNaN(price)) return $("itemMsg").textContent = "Enter a name and a price.";
   if (!photoData) return $("itemMsg").textContent = "Choose a photo.";
-  const data = { name, price, desc: $("iDesc").value.trim(), photo: photoData };
+  const data = { name, price, discount: Math.min(90, Math.max(0, Math.round(parseFloat($("iDisc").value) || 0))), desc: $("iDesc").value.trim(), photo: photoData };
   try {
     if (editId) await setDoc(doc(db, "items", editId), data, { merge: true });
     else await addDoc(collection(db, "items"), { ...data, createdAt: serverTimestamp() });
