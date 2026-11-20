@@ -49,6 +49,8 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
 .status{font:700 .75rem system-ui,sans-serif;padding:2px 8px;border-radius:10px;background:var(--line)}
 .s-New{background:#f3d9a4;color:#4a3300}.s-Confirmed{background:#c9e0f5;color:#0e2f4d}.s-Shipped{background:#d6d0f0;color:#2a2060}.s-Delivered{background:#cfe8d2;color:#16401d}.s-Cancelled{background:#f2cfcb;color:#5a1812}
 select{padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:.9rem}
+.pay{border:1px solid var(--line);border-radius:8px;margin:12px 0 0;padding:6px 12px 8px;font-family:system-ui,sans-serif;font-size:.9rem}
+.opt{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:.95rem}.opt input{width:auto}
 .hidden{display:none!important}
 </style>
 </head>
@@ -111,6 +113,12 @@ select{padding:6px;border:1px solid var(--line);border-radius:6px;background:var
   <p class="row"><strong>Total</strong><strong id="cartTotal" class="price"></strong></p>
   <label for="cName">Your name</label><input id="cName">
   <label for="cContact">Phone or email</label><input id="cContact">
+  <label for="cAddress">Delivery address</label><textarea id="cAddress" rows="2" autocomplete="street-address"></textarea>
+  <fieldset class="pay"><legend>Payment method</legend>
+    <label class="opt"><input type="radio" name="pay" value="Cash on delivery" checked> Cash on delivery</label>
+    <label class="opt"><input type="radio" name="pay" value="Card payment"> Card payment</label>
+    <p class="note2" id="payNote">Pay in cash when your order arrives.</p>
+  </fieldset>
   <p class="msg" id="cartMsg"></p>
   <div class="row"><button id="cartClose">Close</button><button id="cartOrder" class="primary">Place order</button></div>
 </dialog>
@@ -324,6 +332,7 @@ function renderOrders() {
     return `<article class="order">
       <div class="row"><strong>Order ${esc(o.id.slice(0, 6).toUpperCase())}</strong><span class="status s-${st}">${st}</span></div>
       <div class="note2">${esc(when)}</div>
+      <div class="note2">${esc(o.payment || "Cash on delivery")}, ${o.paymentStatus === "Paid" ? "paid" : "not paid yet"}</div>
       ${isAdmin ? `<div class="note2">${esc(o.customer)}, ${esc(o.contact)}${o.guest ? " (guest)" : ""}</div>` : ""}
       ${lines}
       <div class="row"><strong>Total</strong><strong class="price">${money(o.total)}</strong></div>
@@ -331,7 +340,8 @@ function renderOrders() {
     </article>`;
   }).join("") : `<p class="empty">${isAdmin ? "No orders to show." : "You have no orders yet."}</p>`;
 }
-$("ordersBtn").onclick = $("myOrdersBtn").onclick = () => { renderOrders(); $("ordersDlg").showModal(); };
+$("ordersBtn").onclick = () => { location.href = "orders.html"; };
+$("myOrdersBtn").onclick = () => { renderOrders(); $("ordersDlg").showModal(); };
 $("ordersClose").onclick = () => $("ordersDlg").close();
 $("orderFilter").onchange = renderOrders;
 $("ordersList").addEventListener("change", async e => {
@@ -349,13 +359,19 @@ $("search").oninput = render;
 $("cartBtn").onclick = () => { $("cartMsg").textContent = ""; $("cartDlg").showModal(); };
 $("cartClose").onclick = () => $("cartDlg").close();
 $("cartLines").addEventListener("click", e => { if (e.target.dataset.rm) { delete cart[e.target.dataset.rm]; saveCart(); } });
+document.querySelectorAll('input[name="pay"]').forEach(r => r.onchange = () => {
+  $("payNote").textContent = r.value === "Card payment" && r.checked
+    ? "We will send you a secure payment link, or bring a card machine when we deliver."
+    : "Pay in cash when your order arrives.";
+});
 $("cartOrder").onclick = async () => {
   const lines = Object.entries(cart).filter(([id]) => items.some(i => i.id === id));
   if (!lines.length) return $("cartMsg").textContent = "Add an item to your cart first.";
   if (!$("cName").value.trim() || !$("cContact").value.trim()) return $("cartMsg").textContent = "Enter your name and a phone or email.";
+  if (!$("cAddress").value.trim()) return $("cartMsg").textContent = "Enter your delivery address.";
   try {
     const order = lines.map(([id, q]) => { const i = items.find(x => x.id === id); return { name: i.name, price: salePrice(i), qty: q }; });
-    await addDoc(collection(db, "orders"), { uid: currentUser ? currentUser.uid : null, guest: !currentUser, status: "New", customer: $("cName").value.trim(), contact: $("cContact").value.trim(), items: order, total: order.reduce((s, o) => s + o.price * o.qty, 0), createdAt: serverTimestamp() });
+    await addDoc(collection(db, "orders"), { uid: currentUser ? currentUser.uid : null, guest: !currentUser, status: "New", payment: document.querySelector('input[name="pay"]:checked').value, paymentStatus: "Unpaid", address: $("cAddress").value.trim(), customer: $("cName").value.trim(), contact: $("cContact").value.trim(), items: order, total: order.reduce((s, o) => s + o.price * o.qty, 0), createdAt: serverTimestamp() });
     cart = {}; saveCart(); $("cartDlg").close(); alert(currentUser ? "Order placed. You can follow it under My orders." : "Order placed. We will contact you soon.");
   } catch (err) { $("cartMsg").textContent = "Could not place the order: " + err.message; }
 };
