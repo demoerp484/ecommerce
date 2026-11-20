@@ -42,6 +42,13 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
 .cartline{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-family:system-ui,sans-serif;font-size:.9rem}
 .msg{font-size:.85rem;color:var(--danger);min-height:1.2em;font-family:system-ui,sans-serif}
 .search{padding:14px 5vw 0}.search input{max-width:460px;font-size:1rem;padding:10px 12px}
+.usertag{font:.8rem system-ui,sans-serif;color:var(--muted);align-self:center;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ordersDlg{width:min(560px,94vw);max-height:88vh;overflow:auto}
+.order{border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0;background:var(--card)}
+.note2{color:var(--muted);font:.8rem system-ui,sans-serif;margin:2px 0 6px}
+.status{font:700 .75rem system-ui,sans-serif;padding:2px 8px;border-radius:10px;background:var(--line)}
+.s-New{background:#f3d9a4;color:#4a3300}.s-Confirmed{background:#c9e0f5;color:#0e2f4d}.s-Shipped{background:#d6d0f0;color:#2a2060}.s-Delivered{background:#cfe8d2;color:#16401d}.s-Cancelled{background:#f2cfcb;color:#5a1812}
+select{padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:.9rem}
 .hidden{display:none!important}
 </style>
 </head>
@@ -49,9 +56,12 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
 <header>
   <h1 id="shopName">My Shop</h1>
   <nav>
-    <button id="adminBtn">Admin</button>
+    <button id="adminBtn">Login</button>
+    <span id="userTag" class="usertag hidden"></span>
     <button id="addBtn" class="primary hidden">Add item</button>
     <button id="seedBtn" class="hidden">Load sample items</button>
+    <button id="ordersBtn" class="hidden">Orders</button>
+    <button id="myOrdersBtn" class="hidden">My orders</button>
     <button id="logoutBtn" class="hidden">Log out</button>
     <button id="cartBtn">Cart (<span id="cartCount">0</span>)</button>
   </nav>
@@ -73,11 +83,12 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
 
 <!-- Login -->
 <dialog id="loginDlg">
-  <h2>Admin login</h2>
+  <h2>Login or register</h2>
   <label for="email">Email</label><input id="email" type="email" autocomplete="username">
   <label for="pass">Password</label><input id="pass" type="password" autocomplete="current-password">
   <p class="msg" id="loginMsg"></p>
-  <div class="row"><button id="loginCancel">Cancel</button><button id="loginGo" class="primary">Log in</button></div>
+  <div class="row"><button id="registerGo">Create account</button><button id="loginGo" class="primary">Log in</button></div>
+  <div class="row" style="margin-top:14px"><button id="forgotBtn">Forgot password</button><button id="guestBtn">Continue as guest</button></div>
 </dialog>
 
 <!-- Add / edit item -->
@@ -104,10 +115,17 @@ input,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius
   <div class="row"><button id="cartClose">Close</button><button id="cartOrder" class="primary">Place order</button></div>
 </dialog>
 
+<!-- Orders -->
+<dialog id="ordersDlg">
+  <div class="row"><h2 id="ordersTitle" style="margin:0">My orders</h2><button id="ordersClose">Close</button></div>
+  <div id="orderFilterWrap" class="hidden" style="margin-top:10px"><select id="orderFilter" aria-label="Filter orders by status"></select></div>
+  <div id="ordersList"></div>
+</dialog>
+
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, collection, addDoc, setDoc, doc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, addDoc, setDoc, doc, deleteDoc, onSnapshot, query, orderBy, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 /* ====== 1. PASTE YOUR FIREBASE CONFIG HERE (Firebase console > Project settings > Your apps) ====== */
 const firebaseConfig = {
@@ -118,13 +136,15 @@ const firebaseConfig = {
 };
 const SHOP_NAME = "My Shop";
 const CURRENCY = "AED ";
+/* Emails that get admin tools. Must match the admin email in your Firestore rules. */
+const ADMIN_EMAILS = ["jaseermtp@gmail.com"];
 /* ================================================================================================= */
 
 document.getElementById("shopName").textContent = SHOP_NAME;
 document.title = SHOP_NAME;
 const $ = id => document.getElementById(id);
 const configured = firebaseConfig.apiKey !== "YOUR_API_KEY";
-let db, auth, items = [], isAdmin = false, editId = null, photoData = "";
+let db, auth, items = [], isAdmin = false, editId = null, photoData = "", currentUser = null, orders = [], unsubOrders = null;
 const selected = new Set(); let shownIds = [];
 const countSel = () => [...selected].filter(id => items.some(i => i.id === id)).length;
 let cart = JSON.parse(localStorage.getItem("cart") || "{}");
@@ -136,11 +156,17 @@ if (configured) {
     items = s.docs.map(d => ({ id: d.id, ...d.data() })); render();
   });
   onAuthStateChanged(auth, u => {
-    isAdmin = !!u; if (!u) selected.clear();
+    currentUser = u;
+    isAdmin = !!u && ADMIN_EMAILS.map(e => e.toLowerCase()).includes((u.email || "").toLowerCase());
+    if (!isAdmin) selected.clear();
     $("seedBtn").classList.toggle("hidden", !isAdmin);
     $("addBtn").classList.toggle("hidden", !isAdmin);
-    $("logoutBtn").classList.toggle("hidden", !isAdmin);
-    $("adminBtn").classList.toggle("hidden", isAdmin);
+    $("logoutBtn").classList.toggle("hidden", !u);
+    $("adminBtn").classList.toggle("hidden", !!u);
+    $("userTag").textContent = u ? (isAdmin ? "Admin: " : "") + u.email : "";
+    $("userTag").classList.toggle("hidden", !u);
+    if (u && !$("cContact").value) $("cContact").value = u.email;
+    watchOrders(u);
     render();
   });
 } else {
@@ -265,6 +291,60 @@ $("seedBtn").onclick = async () => {
     })));
   } catch (err) { alert("Could not add items: " + err.message); }
 };
+
+/* ---- Orders: customers see their own, admin sees and manages all ---- */
+const STATUSES = ["New", "Confirmed", "Shipped", "Delivered", "Cancelled"];
+$("orderFilter").innerHTML = ["All", ...STATUSES].map(x => `<option>${x}</option>`).join("");
+function watchOrders(u) {
+  if (unsubOrders) { unsubOrders(); unsubOrders = null; }
+  orders = []; updateOrderUI();
+  if (!u) return;
+  const q = isAdmin ? query(collection(db, "orders"), orderBy("createdAt", "desc")) : query(collection(db, "orders"), where("uid", "==", u.uid));
+  unsubOrders = onSnapshot(q, s => {
+    orders = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds ?? 9e9) - (a.createdAt?.seconds ?? 9e9));
+    updateOrderUI();
+  }, err => console.error("Orders:", err));
+}
+function updateOrderUI() {
+  const nNew = orders.filter(o => (o.status || "New") === "New").length;
+  $("ordersBtn").classList.toggle("hidden", !isAdmin);
+  $("ordersBtn").textContent = nNew ? "Orders (" + nNew + " new)" : "Orders";
+  $("myOrdersBtn").classList.toggle("hidden", !currentUser || isAdmin);
+  if ($("ordersDlg").open) renderOrders();
+}
+function renderOrders() {
+  $("ordersTitle").textContent = isAdmin ? "Incoming orders" : "My orders";
+  $("orderFilterWrap").classList.toggle("hidden", !isAdmin);
+  const f = $("orderFilter").value || "All";
+  const list = isAdmin && f !== "All" ? orders.filter(o => (o.status || "New") === f) : orders;
+  $("ordersList").innerHTML = list.length ? list.map(o => {
+    const st = o.status || "New";
+    const when = o.createdAt?.toDate ? o.createdAt.toDate().toLocaleString() : "Just now";
+    const lines = (o.items || []).map(x => `<div class="cartline"><span>${esc(x.name)} × ${x.qty}</span><span>${money(x.price * x.qty)}</span></div>`).join("");
+    return `<article class="order">
+      <div class="row"><strong>Order ${esc(o.id.slice(0, 6).toUpperCase())}</strong><span class="status s-${st}">${st}</span></div>
+      <div class="note2">${esc(when)}</div>
+      ${isAdmin ? `<div class="note2">${esc(o.customer)}, ${esc(o.contact)}${o.guest ? " (guest)" : ""}</div>` : ""}
+      ${lines}
+      <div class="row"><strong>Total</strong><strong class="price">${money(o.total)}</strong></div>
+      ${isAdmin ? `<div class="row" style="margin-top:8px"><select data-status="${o.id}" aria-label="Order status">${STATUSES.map(x => `<option ${x === st ? "selected" : ""}>${x}</option>`).join("")}</select><button class="danger" data-delorder="${o.id}">Delete</button></div>` : ""}
+    </article>`;
+  }).join("") : `<p class="empty">${isAdmin ? "No orders to show." : "You have no orders yet."}</p>`;
+}
+$("ordersBtn").onclick = $("myOrdersBtn").onclick = () => { renderOrders(); $("ordersDlg").showModal(); };
+$("ordersClose").onclick = () => $("ordersDlg").close();
+$("orderFilter").onchange = renderOrders;
+$("ordersList").addEventListener("change", async e => {
+  const id = e.target.dataset.status; if (!id || !isAdmin) return;
+  try { await setDoc(doc(db, "orders", id), { status: e.target.value }, { merge: true }); }
+  catch (err) { alert("Could not update the order: " + err.message); }
+});
+$("ordersList").addEventListener("click", async e => {
+  const id = e.target.dataset.delorder;
+  if (!id || !isAdmin || !confirm("Delete this order?")) return;
+  try { await deleteDoc(doc(db, "orders", id)); }
+  catch (err) { alert("Could not delete the order: " + err.message); }
+});
 $("search").oninput = render;
 $("cartBtn").onclick = () => { $("cartMsg").textContent = ""; $("cartDlg").showModal(); };
 $("cartClose").onclick = () => $("cartDlg").close();
@@ -275,17 +355,31 @@ $("cartOrder").onclick = async () => {
   if (!$("cName").value.trim() || !$("cContact").value.trim()) return $("cartMsg").textContent = "Enter your name and a phone or email.";
   try {
     const order = lines.map(([id, q]) => { const i = items.find(x => x.id === id); return { name: i.name, price: salePrice(i), qty: q }; });
-    await addDoc(collection(db, "orders"), { customer: $("cName").value.trim(), contact: $("cContact").value.trim(), items: order, total: order.reduce((s, o) => s + o.price * o.qty, 0), createdAt: serverTimestamp() });
-    cart = {}; saveCart(); $("cartDlg").close(); alert("Order placed. We will contact you soon.");
+    await addDoc(collection(db, "orders"), { uid: currentUser ? currentUser.uid : null, guest: !currentUser, status: "New", customer: $("cName").value.trim(), contact: $("cContact").value.trim(), items: order, total: order.reduce((s, o) => s + o.price * o.qty, 0), createdAt: serverTimestamp() });
+    cart = {}; saveCart(); $("cartDlg").close(); alert(currentUser ? "Order placed. You can follow it under My orders." : "Order placed. We will contact you soon.");
   } catch (err) { $("cartMsg").textContent = "Could not place the order: " + err.message; }
 };
 
 /* ---- Admin login ---- */
 $("adminBtn").onclick = () => { if (!configured) return alert("Add your Firebase config first."); $("loginMsg").textContent = ""; $("loginDlg").showModal(); };
-$("loginCancel").onclick = () => $("loginDlg").close();
-$("loginGo").onclick = async () => {
-  try { await signInWithEmailAndPassword(auth, $("email").value, $("pass").value); $("loginDlg").close(); $("pass").value = ""; }
-  catch { $("loginMsg").textContent = "Wrong email or password."; }
+$("guestBtn").onclick = () => $("loginDlg").close();
+const authMsg = c => ({
+  "auth/invalid-credential": "Wrong email or password.", "auth/invalid-email": "Enter a valid email address.",
+  "auth/email-already-in-use": "This email is already registered. Log in instead.", "auth/weak-password": "Use a password with at least 6 characters.",
+  "auth/missing-password": "Enter your password.", "auth/too-many-requests": "Too many tries. Wait a moment and try again.",
+  "auth/operation-not-allowed": "Email/password sign-in is not turned on in Firebase."
+}[c] || "Something went wrong. Try again.");
+async function doAuth(fn) {
+  try { await fn(auth, $("email").value.trim(), $("pass").value); $("loginDlg").close(); $("pass").value = ""; }
+  catch (err) { $("loginMsg").textContent = authMsg(err.code); }
+}
+$("loginGo").onclick = () => doAuth(signInWithEmailAndPassword);
+$("registerGo").onclick = () => doAuth(createUserWithEmailAndPassword);
+$("forgotBtn").onclick = async () => {
+  const em = $("email").value.trim();
+  if (!em) return $("loginMsg").textContent = "Enter your email first.";
+  try { await sendPasswordResetEmail(auth, em); $("loginMsg").textContent = "Password reset email sent. Check your inbox."; }
+  catch (err) { $("loginMsg").textContent = authMsg(err.code); }
 };
 $("logoutBtn").onclick = () => signOut(auth);
 
